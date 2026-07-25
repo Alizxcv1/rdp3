@@ -5,28 +5,65 @@ on: [workflow_dispatch]
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 360
     steps:
-    - name: Enable RDP
+    - name: Enable RDP Services
       run: |
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
         Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
-    - name: Download Tailscale
+        Write-Host "✅ RDP configured"
+      shell: powershell
+
+    - name: Download and Install Tailscale
       run: |
-        curl -L -o tailscale-setup.exe https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe
-        Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/install" -Wait
+        Write-Host "📦 Downloading Tailscale..."
+        curl -L -o $env:TEMP	ailscale-setup.exe https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe
+        Write-Host "⚙️ Installing Tailscale..."
+        Start-Process -FilePath "$env:TEMP	ailscale-setup.exe" -ArgumentList "/install" -NoNewWindow -Wait
+        Write-Host "✅ Tailscale installed"
+        Start-Sleep -Seconds 5
+      shell: powershell
+
     - name: Connect to Tailscale
       run: |
-        & "C:\Program Files\Tailscale	ailscale.exe" up --authkey=tskey-auth-k9jpfLK5dE11CNTRL-YS8n4sv84iHay3Fi7jY5jHL3dHSiQoDK
-    - name: Get Tailscale IP
+        $TailscalePath = "C:\Program Files\Tailscale	ailscale.exe"
+        Write-Host "🔗 Connecting to Tailscale..."
+        & $TailscalePath up --authkey=tskey-auth-k9jpfLK5dE11CNTRL-YS8n4sv84iHay3Fi7jY5jHL3dHSiQoDK --hostname=github-runner-windows
+        Start-Sleep -Seconds 10
+        $ip = & $TailscalePath ip -4
+        Write-Host "TAILSCALE_IP=$ip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        Write-Host "✅ Connected to Tailscale: $ip"
+      shell: powershell
+
+    - name: Verify Tailscale Connection
       run: |
-        $ip = & "C:\Program Files\Tailscale	ailscale.exe" ip -4
-        Write-Host "🌐 Server is online on Tailscale!"
-        Write-Host "RDP Connection: $ip:3389"
-        Write-Host "Username: runneradmin"
-        Write-Host "Password: P@ssw0rd!"
-    - name: Keep Alive
+        $TailscalePath = "C:\Program Files\Tailscale	ailscale.exe"
+        Write-Host "🌐 Tailscale Status:"
+        & $TailscalePath status
+        Write-Host ""
+        Write-Host "✅ Server Information:"
+        Write-Host "Hostname: github-runner-windows"
+        Write-Host "RDP User: runneradmin"
+        Write-Host "RDP Password: P@ssw0rd!"
+        Write-Host "RDP Address: ${{ env.TAILSCALE_IP }}:3389"
+      shell: powershell
+
+    - name: Keep Connection Alive
       run: |
-        Write-Host "Tailscale connection is active..."
-        Start-Sleep -Seconds 21600
+        Write-Host "🔄 Keeping Tailscale connection alive for 6 hours..."
+        $TailscalePath = "C:\Program Files\Tailscale	ailscale.exe"
+        for ($i = 1; $i -le 360; $i++) {
+          $time = Get-Date -Format "HH:mm:ss"
+          Write-Host "[$time] Connection check $i/360 - Tailscale active"
+          & $TailscalePath status > $null 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ Tailscale is connected"
+          } else {
+            Write-Host "⚠️ Warning: Tailscale might be disconnected"
+          }
+          Start-Sleep -Seconds 60
+        }
+        Write-Host "✅ Session completed"
+      shell: powershell
