@@ -7,45 +7,67 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-    - name: Enable RDP
+    - name: Enable RDP and User
       run: |
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+        Write-Host "Configuring RDP..."
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 1
         Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
-        Write-Host "RDP enabled"
+        Write-Host "RDP ready on port 3389"
       shell: powershell
 
-    - name: Install and Connect Tailscale
+    - name: Setup Tailscale
       run: |
         Write-Host "Installing Tailscale..."
-        curl -L -o C:\Temp\tailscale-setup.exe https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe
-        Start-Process -FilePath "C:\Temp\tailscale-setup.exe" -ArgumentList "/install" -NoNewWindow -Wait
-        Start-Sleep -Seconds 5
-        Write-Host "Connecting to Tailscale..."
-        C:\"Program Files"\Tailscale\tailscale.exe up --authkey=tskey-auth-k9jpfLK5dE11CNTRL-YS8n4sv84iHay3Fi7jY5jHL3dHSiQoDK --hostname=github-runner-windows
+        $TempDir = "C:\Windows\Temp"
+        $DownloadPath = "$TempDir\tailscale-setup.exe"
+
+        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile $DownloadPath -UseBasicParsing
+
+        Write-Host "Running Tailscale installer..."
+        Start-Process -FilePath $DownloadPath -ArgumentList "/install","/quiet" -NoNewWindow -Wait
+
         Start-Sleep -Seconds 10
-        $ip = C:\"Program Files"\Tailscale\tailscale.exe ip -4
-        Write-Host "Tailscale IP: $ip"
-        Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$ip"
+
+        Write-Host "Connecting to Tailscale network..."
+        $TailscaleExe = "C:\Program Files\Tailscale\tailscale.exe"
+
+        if (Test-Path $TailscaleExe) {
+          & $TailscaleExe up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=github-runner-windows 2>&1
+          Start-Sleep -Seconds 15
+
+          $TailscaleIP = & $TailscaleExe ip -4 2>&1
+          Write-Host "Tailscale IP: $TailscaleIP"
+          "TAILSCALE_IP=$TailscaleIP" | Add-Content -Path $env:GITHUB_ENV
+        } else {
+          Write-Host "Tailscale installation failed"
+          exit 1
+        }
       shell: powershell
 
-    - name: Server Info
+    - name: Server Status
       run: |
-        Write-Host "========== SERVER ONLINE =========="
+        Write-Host "=========================================="
+        Write-Host "WINDOWS SERVER ONLINE - TAILSCALE READY"
+        Write-Host "=========================================="
         Write-Host "Hostname: github-runner-windows"
-        Write-Host "RDP IP: ${{ env.TAILSCALE_IP }}"
-        Write-Host "RDP Port: 3389"
-        Write-Host "RDP User: runneradmin"
-        Write-Host "RDP Password: P@ssw0rd!"
-        Write-Host "=================================="
+        Write-Host "RDP Address: ${{ env.TAILSCALE_IP }}:3389"
+        Write-Host "Username: runneradmin"
+        Write-Host "Password: P@ssw0rd!"
+        Write-Host "=========================================="
       shell: powershell
 
-    - name: Keep Alive
+    - name: Keep Server Running
       run: |
-        Write-Host "Server running (6 hours timeout)..."
+        Write-Host "Server is online, waiting 6 hours..."
+        $TailscaleExe = "C:\Program Files\Tailscale\tailscale.exe"
+
         for ($i = 1; $i -le 360; $i++) {
           Start-Sleep -Seconds 60
-          Write-Host "Minute $i : Still online"
+          $Status = & $TailscaleExe status 2>&1 | Select-Object -First 1
+          Write-Host "[$i/360] Connected - $Status"
         }
+
+        Write-Host "Session ended"
       shell: powershell
