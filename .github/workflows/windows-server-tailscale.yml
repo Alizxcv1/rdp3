@@ -1,0 +1,34 @@
+name: Windows Server (Tailscale)
+
+on: [workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - name: Enable RDP
+      run: |
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+        Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
+    - name: Download Tailscale
+      run: |
+        curl -L -o tailscale-setup.exe https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe
+        Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/install" -Wait
+    - name: Connect to Tailscale
+      run: |
+        & "C:\Program Files\Tailscale	ailscale.exe" up --authkey=$Env:TAILSCALE_AUTHKEY
+      env:
+        TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+    - name: Get Tailscale IP
+      run: |
+        $ip = & "C:\Program Files\Tailscale	ailscale.exe" ip -4
+        Write-Host "🌐 Server is online on Tailscale!"
+        Write-Host "RDP Connection: $ip:3389"
+        Write-Host "Username: runneradmin"
+        Write-Host "Password: P@ssw0rd!"
+    - name: Keep Alive
+      run: |
+        Write-Host "Tailscale connection is active..."
+        Start-Sleep -Seconds 21600
