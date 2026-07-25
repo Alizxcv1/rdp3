@@ -18,32 +18,117 @@ jobs:
       shell: powershell
 
     - name: Setup Tailscale
+      env:
+        TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
       run: |
-        Write-Host "Installing Tailscale..."
-        $TempDir = "C:\Windows\Temp"
-        $DownloadPath = "$TempDir\tailscale-setup.exe"
+        Write-Host "=== TAILSCALE SETUP START ==="
 
-        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile $DownloadPath -UseBasicParsing
-
-        Write-Host "Running Tailscale installer..."
-        Start-Process -FilePath $DownloadPath -ArgumentList "/install","/quiet" -NoNewWindow -Wait
-
-        Start-Sleep -Seconds 10
-
-        Write-Host "Connecting to Tailscale network..."
         $TailscaleExe = "C:\Program Files\Tailscale\tailscale.exe"
+        $TailscaleSvc = "C:\Program Files\Tailscale\tailscaled.exe"
 
+        # Check if already installed
         if (Test-Path $TailscaleExe) {
-          & $TailscaleExe up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=github-runner-windows 2>&1
-          Start-Sleep -Seconds 15
-
-          $TailscaleIP = & $TailscaleExe ip -4 2>&1
-          Write-Host "Tailscale IP: $TailscaleIP"
-          "TAILSCALE_IP=$TailscaleIP" | Add-Content -Path $env:GITHUB_ENV
+          Write-Host "Tailscale already installed, using existing..."
         } else {
-          Write-Host "Tailscale installation failed"
+          Write-Host "Downloading Tailscale installer..."
+          $TempDir = "$env:TEMP"
+          $DownloadPath = "$TempDir\tailscale-setup.exe"
+
+          try {
+            Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" `
+              -OutFile $DownloadPath -UseBasicParsing -TimeoutSec 30
+
+            if (Test-Path $DownloadPath) {
+              Write-Host "✓ Installer downloaded"
+            } else {
+              Write-Host "✗ Download failed"
+              exit 1
+            }
+          } catch {
+            Write-Host "✗ Download error: $_"
+            exit 1
+          }
+
+          Write-Host "Installing Tailscale..."
+          try {
+            $proc = Start-Process -FilePath $DownloadPath `
+              -ArgumentList "/install","/quiet","/norestart" `
+              -NoNewWindow -Wait -PassThru
+
+            if ($proc.ExitCode -eq 0) {
+              Write-Host "✓ Tailscale installed"
+            } else {
+              Write-Host "✗ Install exit code: $($proc.ExitCode)"
+            }
+          } catch {
+            Write-Host "✗ Install error: $_"
+            exit 1
+          }
+
+          Start-Sleep -Seconds 5
+        }
+
+        # Verify executable exists
+        if (-not (Test-Path $TailscaleExe)) {
+          Write-Host "✗ Tailscale executable not found at $TailscaleExe"
+          Write-Host "Checking Program Files..."
+          Get-ChildItem "C:\Program Files" -Filter tailscale* -Directory
           exit 1
         }
+
+        Write-Host "✓ Tailscale executable found"
+        Write-Host "Tailscale version:"
+        & $TailscaleExe version 2>&1
+
+        # Verify auth key is set
+        if (-not $env:TS_AUTHKEY) {
+          Write-Host "✗ TAILSCALE_AUTHKEY secret not found"
+          exit 1
+        }
+        Write-Host "✓ Auth key loaded (length: $($env:TS_AUTHKEY.Length))"
+
+        # Connect to Tailscale
+        Write-Host "Connecting to Tailscale..."
+        try {
+          $output = & $TailscaleExe up `
+            --authkey="$env:TS_AUTHKEY" `
+            --hostname="github-runner-windows" `
+            --accept-dns=false `
+            --accept-routes=false `
+            2>&1
+
+          Write-Host "Connection output:"
+          Write-Host $output
+        } catch {
+          Write-Host "✗ Connection error: $_"
+          exit 1
+        }
+
+        Start-Sleep -Seconds 20
+
+        # Get IP
+        Write-Host "Getting Tailscale IP..."
+        try {
+          $TailscaleIP = & $TailscaleExe ip -4 2>&1
+          $TailscaleIP = $TailscaleIP.Trim()
+
+          if ($TailscaleIP -and $TailscaleIP -match '^\d+\.\d+\.\d+\.\d+$') {
+            Write-Host "✓ Tailscale IP: $TailscaleIP"
+            "TAILSCALE_IP=$TailscaleIP" | Add-Content -Path $env:GITHUB_ENV
+          } else {
+            Write-Host "✗ Invalid IP: $TailscaleIP"
+            exit 1
+          }
+        } catch {
+          Write-Host "✗ IP lookup error: $_"
+          exit 1
+        }
+
+        # Verify connection
+        Write-Host "Verifying Tailscale status..."
+        & $TailscaleExe status 2>&1
+
+        Write-Host "=== TAILSCALE SETUP COMPLETE ==="
       shell: powershell
 
     - name: Server Status
@@ -60,14 +145,28 @@ jobs:
 
     - name: Keep Server Running
       run: |
-        Write-Host "Server is online, waiting 6 hours..."
+        Write-Host "=== SERVER KEEP-ALIVE STARTED ==="
         $TailscaleExe = "C:\Program Files\Tailscale\tailscale.exe"
+        $CheckInterval = 60  # seconds
 
-        for ($i = 1; $i -le 360; $i++) {
-          Start-Sleep -Seconds 60
-          $Status = & $TailscaleExe status 2>&1 | Select-Object -First 1
-          Write-Host "[$i/360] Connected - $Status"
+        for ($minute = 1; $minute -le 360; $minute++) {
+          try {
+            Start-Sleep -Seconds $CheckInterval
+
+            # Check Tailscale status
+            $status = & $TailscaleExe status 2>&1
+            $connected = $status | Select-String "Logged in"
+
+            if ($connected) {
+              Write-Host "[$minute/360] ✓ Tailscale connected"
+            } else {
+              Write-Host "[$minute/360] ⚠ Checking status..."
+              Write-Host $status
+            }
+          } catch {
+            Write-Host "[$minute/360] Status check failed: $_"
+          }
         }
 
-        Write-Host "Session ended"
+        Write-Host "=== SERVER SESSION ENDED (6 hours) ==="
       shell: powershell
