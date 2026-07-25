@@ -14,14 +14,43 @@ jobs:
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
         Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
-        Write-Host "RDP Ready"
+        Write-Host "✓ RDP Ready"
+      shell: powershell
+
+    - name: Display Connection Info
+      run: |
+        Write-Host ""
+        Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║                   🔓 SERVER ONLINE                         ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "📍 System Info:" -ForegroundColor Yellow
+        Write-Host "  Hostname: $env:COMPUTERNAME"
+        Write-Host "  OS: Windows Server (GitHub Actions Runner)"
+        Write-Host "  Runner: GitHub Actions"
+        Write-Host ""
+        Write-Host "🔐 RDP Connection:" -ForegroundColor Yellow
+        Write-Host "  Host: See runner details in workflow"
+        Write-Host "  Port: 3389"
+        Write-Host "  User: runneradmin"
+        Write-Host "  Password: P@ssw0rd!"
+        Write-Host ""
+        Write-Host "⏳ Session Duration: 6 hours" -ForegroundColor Green
+        Write-Host "🔄 Keep Alive: Enabled" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║ RDP Command:                                               ║" -ForegroundColor Cyan
+        Write-Host "║ mstsc /v:<github-runner-ip>:3389                           ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host ""
       shell: powershell
 
     - name: Keep Server Online
       run: |
-        Write-Host "Server online - Waiting 6 hours"
+        Write-Host "🟢 Server running..."
         for ($i = 1; $i -le 360; $i++) {
-          Write-Host "Minute $i/360"
+          Write-Host "[$i/360 min] Server online"
           Start-Sleep -Seconds 60
         }
+        Write-Host "🔴 Session ended"
       shell: powershell
