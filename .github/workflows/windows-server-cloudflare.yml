@@ -1,0 +1,84 @@
+name: Windows Server (Cloudflare Tunnel)
+
+on: [workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+    - name: Enable RDP
+      run: |
+        Write-Host "🔧 Enabling RDP..."
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 1
+        Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
+        Write-Host "✓ RDP ready on port 3389"
+      shell: powershell
+
+    - name: Download & Setup Cloudflare Tunnel
+      run: |
+        Write-Host "📥 Downloading Cloudflare Tunnel..."
+        $url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+        $path = "C:\cloudflared.exe"
+
+        Invoke-WebRequest -Uri $url -OutFile $path -UseBasicParsing
+
+        if (Test-Path $path) {
+          Write-Host "✓ Cloudflare Tunnel downloaded"
+          & $path --version
+        } else {
+          Write-Host "✗ Download failed"
+          exit 1
+        }
+      shell: powershell
+
+    - name: Start Tunnel & Get URL
+      run: |
+        Write-Host "🌐 Starting Cloudflare Tunnel..."
+        $cloudflared = "C:\cloudflared.exe"
+
+        # Start tunnel in background
+        $process = Start-Process -FilePath $cloudflared `
+          -ArgumentList "tunnel","--url","rdp://localhost:3389" `
+          -RedirectStandardOutput "C:\tunnel_output.txt" `
+          -RedirectStandardError "C:\tunnel_error.txt" `
+          -PassThru -NoNewWindow
+
+        Write-Host "⏳ Waiting for tunnel URL..."
+        Start-Sleep -Seconds 5
+
+        $output = Get-Content "C:\tunnel_output.txt" -ErrorAction SilentlyContinue
+        $tunnelUrl = $output | Select-String "https://" | Select-Object -First 1
+
+        if ($tunnelUrl) {
+          $url = $tunnelUrl.ToString() -replace '.*?(https://[^ ]+).*', '$1'
+          Write-Host "✓ Tunnel URL: $url"
+          Add-Content -Path $env:GITHUB_ENV -Value "TUNNEL_URL=$url"
+        }
+      shell: powershell
+
+    - name: Server Info
+      run: |
+        Write-Host "==========================================="
+        Write-Host "🔓 WINDOWS SERVER ONLINE"
+        Write-Host "==========================================="
+        Write-Host "RDP via Cloudflare Tunnel:"
+        Write-Host "${{ env.TUNNEL_URL }}"
+        Write-Host ""
+        Write-Host "User: runneradmin"
+        Write-Host "Password: P@ssw0rd!"
+        Write-Host ""
+        Write-Host "Connection: Use Cloudflare Access or direct RDP tunnel"
+        Write-Host "==========================================="
+      shell: powershell
+
+    - name: Keep Alive
+      run: |
+        Write-Host "Server running (6 hours)..."
+        for ($i = 1; $i -le 360; $i++) {
+          Start-Sleep -Seconds 60
+          Write-Host "[$i/360] ✓ Online"
+        }
+      shell: powershell
