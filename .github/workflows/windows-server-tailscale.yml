@@ -18,9 +18,7 @@ jobs:
         Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/install" -Wait
     - name: Connect to Tailscale
       run: |
-        & "C:\Program Files\Tailscale	ailscale.exe" up --authkey=$Env:TAILSCALE_AUTHKEY
-      env:
-        TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        & "C:\Program Files\Tailscale	ailscale.exe" up --authkey=tskey-auth-k9jpfLK5dE11CNTRL-YS8n4sv84iHay3Fi7jY5jHL3dHSiQoDK
     - name: Get Tailscale IP
       run: |
         $ip = & "C:\Program Files\Tailscale	ailscale.exe" ip -4
