@@ -1,23 +1,73 @@
-name: Linux Server
+name: Linux Server (Tailscale SSH)
 
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
 
 jobs:
-  build:
+  ssh-job:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
-    - name: Download ngrok
-      run: |
-        curl -sL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -o ngrok.tgz
-        tar xzf ngrok.tgz
-    - name: Set password & enable SSH
-      run: |
-        echo "runner:P@ssw0rd!" | sudo chpasswd
-        sudo sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-        sudo systemctl restart ssh || sudo service ssh restart
-    - name: Auth ngrok
-      run: ./ngrok authtoken $NGROK_AUTH_TOKEN
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-    - name: Create SSH Tunnel (port 22)
-      run: ./ngrok tcp 22
+      - name: Create SSH password
+        shell: bash
+        run: |
+          password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9!@#%_-' | head -c 16)
+          echo "runner:$password" | sudo chpasswd
+          echo "::add-mask::$password"
+          echo "SSH_USER=runner" >> "$GITHUB_ENV"
+          echo "SSH_PASS=$password" >> "$GITHUB_ENV"
+          sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh || sudo service ssh restart
+
+      - name: Install Tailscale
+        shell: bash
+        run: curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Connect Tailscale
+        shell: bash
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          if [ -z "$TAILSCALE_AUTH_KEY" ]; then
+            echo "TAILSCALE_AUTH_KEY repository secret is missing." >&2
+            exit 1
+          fi
+          hostname="gh-linux-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo tailscale up --auth-key="$TAILSCALE_AUTH_KEY" --hostname="$hostname" --accept-dns=false
+          ip=$(tailscale ip -4 | head -n 1)
+          echo "TS_IP=$ip" >> "$GITHUB_ENV"
+          echo "TS_HOSTNAME=$hostname" >> "$GITHUB_ENV"
+
+      - name: Save connection info
+        shell: bash
+        run: |
+          cat > connection-info.txt <<EOF
+          TYPE=SSH
+          TAILSCALE_IP=$TS_IP
+          HOSTNAME=$TS_HOSTNAME
+          PORT=22
+          USERNAME=$SSH_USER
+          PASSWORD=$SSH_PASS
+          EOF
+          {
+            echo "## SSH connection ready"
+            echo "- Tailscale IP: $TS_IP"
+            echo "- Username: $SSH_USER"
+            echo "- Password: $SSH_PASS"
+            echo "- Command: ssh $SSH_USER@$TS_IP"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload connection info
+        uses: actions/upload-artifact@v4
+        with:
+          name: connection-info-${{ github.run_id }}
+          path: connection-info.txt
+          retention-days: 1
+
+      - name: Keep Alive
+        shell: bash
+        run: |
+          while true; do
+            echo "[$(date -Iseconds)] SSH running at $TS_IP"
+            sleep 300
+          done
